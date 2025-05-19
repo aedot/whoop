@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, make_response
 from models import SessionLocal, init_db, Sleep, Recovery, Workout, Cycle
 from scheduler import start_scheduler, fetch_and_store
 from dotenv import load_dotenv
@@ -10,46 +10,45 @@ load_dotenv()
 logger = setup_logging()
 app = Flask(__name__)
 
+def fetch_records(model, limit=10):
+    """Helper to fetch records with error handling."""
+    try:
+        with SessionLocal() as session:
+            records = session.query(model).order_by(model.fetched_at.desc()).limit(limit).all()
+        logger.info(f"Returned {len(records)} records from {model.__tablename__}")
+        return jsonify([r.data for r in records])
+    except Exception as e:
+        logger.error(f"Failed to fetch records from {model.__tablename__}: {e}", exc_info=True)
+        return make_response(jsonify({"error": "Internal Server Error"}), 500)
+
 @app.route('/api/sleep')
 def get_sleep():
-    session = SessionLocal()
-    records = session.query(Sleep).order_by(Sleep.fetched_at.desc()).limit(10).all()
-    session.close()
-    logger.info(f"Returned {len(records)} sleep records")
-    return jsonify([r.data for r in records])
+    return fetch_records(Sleep)
 
 @app.route('/api/recovery')
 def get_recovery():
-    session = SessionLocal()
-    records = session.query(Recovery).order_by(Recovery.fetched_at.desc()).limit(10).all()
-    session.close()
-    logger.info(f"Returned {len(records)} recovery records")
-    return jsonify([r.data for r in records])
+    return fetch_records(Recovery)
 
 @app.route('/api/workout')
 def get_workout():
-    session = SessionLocal()
-    records = session.query(Workout).order_by(Workout.fetched_at.desc()).limit(10).all()
-    session.close()
-    logger.info(f"Returned {len(records)} workout records")
-    return jsonify([r.data for r in records])
+    return fetch_records(Workout)
 
 @app.route('/api/cycle')
 def get_cycle():
-    session = SessionLocal()
-    records = session.query(Cycle).order_by(Cycle.fetched_at.desc()).limit(10).all()
-    session.close()
-    logger.info(f"Returned {len(records)} cycle records")
-    return jsonify([r.data for r in records])
+    return fetch_records(Cycle)
 
 if __name__ == "__main__":
     logger.info("Initializing database schema...")
     init_db()
 
     logger.info("Running initial WHOOP data fetch...")
-    fetch_and_store()
+    try:
+        fetch_and_store()
+    except Exception as e:
+        logger.error(f"Initial fetch failed: {e}", exc_info=True)
 
     logger.info("Starting scheduler for periodic WHOOP data fetches...")
     start_scheduler()
 
-    app.run(host="0.0.0.0", port=4000, debug=True)
+    debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+    app.run(host="0.0.0.0", port=4000, debug=debug_mode)

@@ -1,19 +1,33 @@
 import logging
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import os
 
 def setup_logging():
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
 
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s - %(message)s')
+    timezone = os.getenv("TIMEZONE", "UTC")
+    try:
+        tzinfo = ZoneInfo(timezone)
+    except Exception:
+        tzinfo = ZoneInfo("UTC")
 
-    # StreamHandler outputs to console
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(formatter)
+    class TZFormatter(logging.Formatter):
+        def formatTime(self, record, datefmt=None):
+            ct = datetime.fromtimestamp(record.created, tz=tzinfo)
+            if datefmt:
+                return ct.strftime(datefmt)
+            return ct.isoformat()
 
-    # Remove all existing handlers and add the new one
+    formatter = TZFormatter('%(asctime)s %(levelname)s %(name)s - %(message)s')
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+
     if logger.hasHandlers():
         logger.handlers.clear()
-    logger.addHandler(ch)
+    logger.addHandler(handler)
 
     return logger

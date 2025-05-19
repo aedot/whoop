@@ -41,23 +41,24 @@ Attributes:
 from __future__ import annotations
 
 import json
+import logging
+from datetime import datetime, timedelta
+from typing import Any, Optional
+
 import requests
-from datetime import datetime, time, timedelta
-from typing import Any
-
 from authlib.common.urls import extract_params
-from authlib.integrations.requests_client import OAuth2Session
-
 
 AUTH_URL = "https://api-7.whoop.com"
 REQUEST_URL = "https://api.prod.whoop.com/developer"
+
+logger = logging.getLogger(__name__)
 
 
 def _auth_password_json(_client, _method, uri, headers, body):
     body = json.dumps(dict(extract_params(body)))
     headers["Content-Type"] = "application/json"
-
     return uri, headers, body
+
 
 class WhoopClient:
     def __init__(self, username: str, password: str):
@@ -65,9 +66,11 @@ class WhoopClient:
         self.password = password
         self.session = requests.Session()
         self.token: dict[str, Any] = {}
+        self.token_expires: Optional[datetime] = None
         self._authenticate()
 
     def _authenticate(self):
+        logger.info("Authenticating with WHOOP API...")
         token_url = f"{AUTH_URL}/oauth/token"
         response = self.session.post(
             token_url,
@@ -81,56 +84,56 @@ class WhoopClient:
         response.raise_for_status()
         raw_token = response.json()
 
-        # Force token_type to Bearer if needed
         raw_token["token_type"] = "Bearer"
         self.token = raw_token
 
-        # Add auth headers to session
+        self.token_expires = datetime.utcnow() + timedelta(seconds=self.token.get("expires_in", 3600))
+
         self.session.headers.update({
             "Authorization": f"Bearer {self.token['access_token']}"
         })
+        logger.info("Authentication successful.")
 
-    def _get(self, endpoint: str, params: dict[str, Any] = None) -> Any: # type: ignore
+    def _build_params(self, start: Optional[str], end: Optional[str]) -> dict[str, str]:
+        return {k: v for k, v in {"start": start, "end": end}.items() if v}
+
+    def _default_dates(self, days: int = 7) -> tuple[str, str]:
+        end = datetime.utcnow()
+        start = end - timedelta(days=days)
+        return start.isoformat() + "Z", end.isoformat() + "Z"
+
+    def _get(self, endpoint: str, params: dict[str, Any] = None) -> Any:  # type: ignore
         url = f"{REQUEST_URL}{endpoint}"
         response = self.session.get(url, params=params or {})
+        if response.status_code == 401:
+            logger.warning("Token expired. Re-authenticating...")
+            self._authenticate()
+            response = self.session.get(url, params=params or {})
         response.raise_for_status()
         return response.json()
 
     def get_user_profile(self) -> dict[str, Any]:
         return self._get("/v1/user/profile/basic")
 
+    def get_sleep_collection(self, start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
+        if not start or not end:
+            start, end = self._default_dates()
+        return self._get("/v1/activity/sleep", self._build_params(start, end))
 
-    def get_sleep_collection(self, start: str = None, end: str = None) -> list[dict[str, Any]]: # type: ignore
-        params = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        return self._get("/v1/activity/sleep", params)
+    def get_recovery_collection(self, start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
+        if not start or not end:
+            start, end = self._default_dates()
+        return self._get("/v1/recovery", self._build_params(start, end))
 
-    def get_recovery_collection(self, start: str = None, end: str = None) -> list[dict[str, Any]]: # type: ignore
-        params = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        return self._get("/v1/recovery", params)
+    def get_cycle_collection(self, start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
+        if not start or not end:
+            start, end = self._default_dates()
+        return self._get("/v1/cycle", self._build_params(start, end))
 
-    def get_cycle_collection(self, start: str = None, end: str = None) -> list[dict[str, Any]]: # type: ignore
-        params = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        return self._get("/v1/cycle", params)
-
-    def get_workout_collection(self, start: str = None, end: str = None) -> list[dict[str, Any]]: # type: ignore
-        params = {}
-        if start:
-            params["start"] = start
-        if end:
-            params["end"] = end
-        return self._get("/v1/activity/workout", params)
+    def get_workout_collection(self, start: Optional[str] = None, end: Optional[str] = None) -> list[dict[str, Any]]:
+        if not start or not end:
+            start, end = self._default_dates()
+        return self._get("/v1/activity/workout", self._build_params(start, end))
 
     def close(self):
         self.session.close()
